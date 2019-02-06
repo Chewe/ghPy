@@ -1,0 +1,163 @@
+I write a bunch of ad-hoc Python scripts, mostly for parsing log files, and have accumulated a library of functions. Here are the useful ones.
+
+(All of these use Python 3.x syntax, so some modifications may be needed for 2.x.)
+
+File I/O and character encoding
+
+read_text_file will read the entire contents of a file into a Unicode string, and automatically detects different character encodings (UTF-8/16/32 or Windows-1252) 
+
+write_file will write a file all at once, and will add a UTF-8 BOM on Windows.
+==================================================================================================
+import os
+import subprocess
+
+# For character encoding auto-detection
+# Second tuple item is whether a BOM is required.
+# List is sorted by false-positive rate on random data.
+_CHARSETS = [
+    ('UTF-32BE', False),
+    ('UTF-32LE', False),
+    ('UTF-8', False),
+    ('UTF-16BE', True),
+    ('UTF-16LE', True)
+]
+
+def autodecode(encoded_text):
+    """
+    Convert bytes to str, automatically detecting the encoding.
+    """
+    if isinstance(encoded_text, str):
+        return str
+    if encoded_text == b'':
+        return ''
+    for (charset, require_bom) in _CHARSETS:
+        try:
+            decoded_text = encoded_text.decode(charset)
+            if (not require_bom) or decoded_text.startswith('\uFEFF'):
+                return decoded_text.lstrip('\uFEFF')
+        except UnicodeError:
+            continue
+    # Unable to determine the encoding.
+    return encoded_text.decode('windows-1252', 'replace')
+
+def read_text_file(filename):
+    """
+    Like open(filename).read(), auto-detecting the character encoding.
+    """
+    with open(filename, 'rb') as f:
+        data = f.read()
+    return autodecode(data).replace('\r\n', '\n').replace('\r', '\n')
+
+def is_ascii(text):
+    """
+    Detect whether text uses only characters in the ASCII range.
+    """
+    if isinstance(text, bytes):
+        return all(char < 0x80 for char in text)
+    else:
+        return all(char < '\x80' for char in str(text))
+
+def write_file(filename, contents, *, mtime=None):
+    """
+    Write a binary file or text file all at once.
+
+    filename -- Path to the file.
+    contents -- str or bytes object.
+    mtime -- If not None, the modification timestamp to set.
+    """
+    # Write in binary or text mode, depending on type(contents).
+    if contents is None:
+        raise TypeError('File contents must not be None')
+    elif isinstance(contents, bytes):
+        with open(filename, 'wb') as f:
+            f.write(contents)
+    else:
+        contents = str(contents)
+        with open(filename, 'w', encoding='UTF-8') as f:
+            if os.name == 'nt' and not is_ascii(contents):
+                f.write('\uFEFF')
+            f.write(contents)
+    # Set the modification time, if requested.
+    if mtime is not None:
+        subprocess.call(['touch', '-t', mtime.strftime('%Y%m%d%H%M.%S'), filename])
+
+==================================================================================================
+CSV generation
+
+Normally used in conjunction with the sqlite3 module for converting query result sets into spreadsheets.
+==================================================================================================
+def quote_csv(value):
+    '''
+    Quote a value for use in a CSV file.
+    '''
+    if value is None:
+        return ''
+    s = str(value)
+    if set(s) & set(',"\r\n'):
+       return '"' + s.replace('"', '""') + '"'
+    else:
+       return s
+
+def db_cursor_to_csv(cursor):
+    '''
+    Convert a database cursor to CSV text.
+    '''
+    headers = [x[0] for x in cursor.description]
+    data = [headers] + list(cursor)
+    return '\n'.join(','.join(quote_csv(field) for field in row) for row in data)
+==================================================================================================
+
+Hex dump parsing
+
+The inverse of IBC StringLib's HexDumpString function. Converts a string containing a hex dump to the bytes object that it represents.
+==================================================================================================
+import base64
+
+def parse_hex_dump(text):
+    '''
+    Convert a HexDumpString dump to its original binary data.
+    '''
+    lines = text.splitlines()
+    hex_lines = [line[6:47].strip() for line in lines]
+    hex_chars = ''.join('\n'.join(hex_lines).split()).upper()
+    return base64.b16decode(hex_chars)
+==================================================================================================
+
+Timedelta constants
+
+For doing date arithmetic. MONTH and YEAR are the average lengths across the Gregorian calendar's 400-year leap-year cycle.
+==================================================================================================
+import datetime
+
+MICROSECOND = datetime.timedelta(0, 0, 1)
+MILLISECOND = datetime.timedelta(0, 0, 1000)
+SECOND = datetime.timedelta(0, 1)
+MINUTE = datetime.timedelta(0, 60)
+HOUR = datetime.timedelta(0, 3600)
+DAY = datetime.timedelta(1)
+WEEK = datetime.timedelta(7)
+MONTH = datetime.timedelta(30, 37746)
+YEAR = datetime.timedelta(365, 20952)
+==================================================================================================
+
+Miscellaneous
+==================================================================================================
+def freq_counts(seq):
+    """
+    Return a dict in the form {value: frequency}.
+    """
+    result = {}
+    for item in seq:
+        result[item] = result.get(item, 0) + 1
+    return result
+
+_WORD_CHARS = set('ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789_')
+
+def extract_words(text):
+    """
+    Return a list of "words" in the given string.
+    A "word" consists of alphanumeric characters and underscores.
+    """
+    return ''.join((char if char in _WORD_CHARS else ' ') for
+==================================================================================================
+
